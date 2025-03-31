@@ -1,2 +1,0 @@
-#!/bin/bash
-wget -O "/data/databases/Julio/FLOGA/raw/10m.zip" "https://uc7801cba8e447be8625d91e377b.dl.dropboxusercontent.com/zip_download_get/CKN73UfWDV6Pb6nS5O4icRA19PdXgXEqhQwm8xm7MpEJuCHmCz3nFtsoOJtyQDITziKYKicg53pxKk1p6r9EDnNPamVQa1HnF4IuZDvj6YyyQw?_download_id=684246216945222676757063827532161898543070114999719614002426448796&_log_download_success=1&_notify_domain=www.dropbox.com&dl=1"

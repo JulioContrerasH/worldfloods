@@ -9,66 +9,61 @@ import ee
 
 ee.Initialize()
 
-# Principal directory
+# Main directory containing the dataset
 dir = pathlib.Path("/media/disk/databases/WORLDFLOODS/2_Mart/hugging_face")
 list_tiff = [str(file) for file in dir.glob("**/*.tif")]
+
+# Prepare metadata DataFrame
 df = pd.DataFrame(list_tiff, columns=["path"])
 df["split"] = df["path"].str.split("/").str[7].replace("val", "validation")
 df["name_file"] = df["path"].str.split("/").str[-1].str.split(".").str[0]
 df["name_folder"] = df["path"].str.split("/").str[-2]
 df["tortilla_path"] = "/data/databases/Julio/Flood_kike/tortillas/" + df["name_file"] + ".tortilla"
 
-# Preview metadata
+# Load base metadata
 base_df = pd.read_csv("/media/disk/databases/WORLDFLOODS/2_Mart/hugging_face/dataset_metadata.csv")
 base_df_modified = base_df.drop(columns=['split'])
-
-# Change column names
 base_df_modified.columns = [
-    'event_id', 'source', 'ems_code', 'aoi_code', 'satellite', 
+    'event_id', 'source', 'ems_code', 'aoi_code', 'satellite',
     'satellite_date', 's2_date', 'bounds', 'crs', 'transform'
 ]
 
-# Extract the event_id from the name_file
-merged_df = df.merge(
-    base_df_modified, 
-    left_on='name_file', 
-    right_on='event_id', 
-    how='left'
-)
-
+# Merge metadata with file paths
+merged_df = df.merge(base_df_modified, left_on='name_file', right_on='event_id', how='left')
 merged_df["satellite_dt"] = pd.to_datetime(merged_df["satellite_date"], format='ISO8601', errors='coerce')
 merged_df["s2_dt"] = pd.to_datetime(merged_df["s2_date"], format='ISO8601', errors='coerce')
 merged_df["date_diff_days"] = abs((merged_df["satellite_dt"] - merged_df["s2_dt"]).dt.days)
 
+# Group by file name for processing
 grouped = merged_df.groupby("name_file")
 
+
+# Process each group and create tortilla files
 for i, (file_name, group) in enumerate(grouped):
-    
-    
     if i % 10 == 0:
         print(f"Processing {i}/{len(grouped)}")
 
     row_s2 = group[group["name_folder"] == "S2"].iloc[0]
     row_gt = group[group["name_folder"] == "gt"].iloc[0]
     row_per = group[group["name_folder"] == "PERMANENTWATERJRC"].iloc[0]
-    
-    with open(row_s2["path"], "rb") as f:
-        data = f.read()
+
+    # Read Sentinel-2 data and create tortilla sample
     profile_row_s2 = rio.open(row_s2["path"]).profile
     sample_row_s2 = tacotoolbox.tortilla.datamodel.Sample(
         id=row_s2["name_folder"],
         path=row_s2["path"],
         file_format="GTiff",
-        data_split=row_s2["split"], 
+        data_split=row_s2["split"],
         stac_data={
             "crs": "EPSG:" + str(profile_row_s2["crs"].to_epsg()),
             "geotransform": profile_row_s2["transform"].to_gdal(),
             "raster_shape": (profile_row_s2["height"], profile_row_s2["width"]),
             "time_start": datetime.datetime.fromisoformat(row_s2.s2_date),
-            "time_end": datetime.datetime.fromisoformat(row_s2.s2_date) # datetime.datetime.strptime "%Y-%m-%dT%H:%M:%S.%f%z"
-            # "centroid": f"POINT ({row_s2['lon_c']} {row_s2['lat_c']})"
+            "time_end": datetime.datetime.fromisoformat(row_s2.s2_date),
         },
     )
+
+    # Read Permanent Water data and create tortilla sample
     profile_row_per = rio.open(row_per["path"]).profile
     sample_row_per = tacotoolbox.tortilla.datamodel.Sample(
         id=row_per["name_folder"],
@@ -81,48 +76,42 @@ for i, (file_name, group) in enumerate(grouped):
             "raster_shape": (profile_row_per["height"], profile_row_per["width"]),
             "time_start": datetime.datetime.fromisoformat(row_per.satellite_date),
             "time_end": datetime.datetime.fromisoformat(row_per.satellite_date),
-            # "centroid": f"POINT ({row_s2['lon_c']} {row_s2['lat_c']})"
         },
     )
+
+    # Read Ground Truth data and create tortilla sample
     profile_row_gt = rio.open(row_gt["path"]).profile
     sample_row_gt = tacotoolbox.tortilla.datamodel.Sample(
         id=row_gt["name_folder"],
         path=row_gt["path"],
         file_format="GTiff",
-        data_split=row_gt["split"], # row_s2["split"]
+        data_split=row_gt["split"],
         stac_data={
             "crs": "EPSG:" + str(profile_row_gt["crs"].to_epsg()),
             "geotransform": profile_row_gt["transform"].to_gdal(),
             "raster_shape": (profile_row_gt["height"], profile_row_gt["width"]),
             "time_start": datetime.datetime.fromisoformat(row_gt.satellite_date),
             "time_end": datetime.datetime.fromisoformat(row_gt.satellite_date),
-            # "centroid": f"POINT ({row_s2['lon_c']} {row_s2['lat_c']})"
         },
     )
 
+    # Create Samples object
     samples = tacotoolbox.tortilla.datamodel.Samples(
-        samples=[
-            sample_row_s2,
-            sample_row_per,
-            sample_row_gt
-        ]
+        samples=[sample_row_s2, sample_row_per, sample_row_gt]
     )
-    
+
+    # Create tortilla file for the samples
     tacotoolbox.tortilla.create(samples, row_s2["tortilla_path"], quiet=True)
 
-# Process tortilla files and append corresponding metadata
+# Create a collection of tortilla samples
 sample_tortillas = []
-
 for i, (file_name, group) in enumerate(grouped, start=1):
-    
-
     if i % 10 == 0:
         print(f"Processing {i}/{len(grouped)}")
 
     row = group[group["name_folder"] == "S2"].iloc[0]
 
-
-    # Load tortilla data for each row
+    # Load tortilla data
     sample_data = tacoreader.load(row["tortilla_path"])
     sample_data = sample_data.iloc[0]
 
@@ -140,28 +129,23 @@ for i, (file_name, group) in enumerate(grouped, start=1):
             "time_start": sample_data["stac:time_start"],
             "time_end": sample_data["stac:time_end"],
         },
-        source = row["source"],
-        ems_code = row["ems_code"],
-        aoi_code = row["aoi_code"],
-        satellite = row["satellite"],
-        satellite_date = row["satellite_date"],
-        s2_date = row["s2_date"],
+        source=row["source"],
+        ems_code=row["ems_code"],
+        aoi_code=row["aoi_code"],
+        satellite=row["satellite"],
+        satellite_date=row["satellite_date"],
+        s2_date=row["s2_date"],
         days_diff=row["date_diff_days"]
-    )    
+    )
     sample_tortillas.append(sample_tortilla)
 
-# Create a collection of all tortilla samples
-samples = tacotoolbox.tortilla.datamodel.Samples(
-    samples=sample_tortillas
+# Create final collection and add metadata
+samples_obj = tacotoolbox.tortilla.datamodel.Samples(samples=sample_tortillas)
+samples_obj = samples_obj.include_rai_metadata(
+    sample_footprint=5120, cache=False, quiet=False
 )
 
-# Add RAI metadata to footer (used for further data processing)
-samples_obj = samples.include_rai_metadata(
-    sample_footprint=5120, # extension in meters
-    cache=False,  # Set to True for caching
-    quiet=False  # Set to True to suppress the progress bar
-)
-
+# Set collection metadata and description
 description = """
 
 ### Database
@@ -296,7 +280,7 @@ bibtex_2 = """
 }
 """
 
-# Create a collection object with metadata for the dataset
+# Create collection object with metadata
 collection_object = tacotoolbox.datamodel.Collection(
     id="worldfloods",
     title="Global flood extent segmentation in optical satellite images",  # Update title accordingly
@@ -376,35 +360,23 @@ collection_object = tacotoolbox.datamodel.Collection(
     }
 )
 
-# Get the path of the tortilla file and create the directory if needed
-directory = pathlib.Path("/data/databases/Julio/Flood_kike/tacos")
-
-
-# Generate the final output file using the samples and collection objects
+# Create the final taco file with all samples and metadata
 output_file = tacotoolbox.create(
     samples=samples_obj,
     collection=collection_object,
-    output= directory / "worldfloods.taco"
+    output=pathlib.Path("/data/databases/Julio/Flood_kike/tacos") / "worldfloods.taco"
 )
 
 
 
 
-
-import tacoreader
-import rasterio as rio
-import matplotlib.pyplot as plt
-
-# Load the dataset
-dataset = tacoreader.load("tacofundation:worldfloods")
-
-# Read a sample row
+# Load and display the dataset for validation
+dataset = tacoreader.load("tacofoundation:worldfloods")
 idx = 0
 row = dataset.read(idx)
-row_id = dataset.iloc[idx]["tortilla:id"]
+s2_path, per_path, gt_path = row.read(0), row.read(1), row.read(2)
 
-# Retrieve the data
-s2_path, per_path, gt_path  = row.read(0), row.read(1), row.read(2)
+# Open Sentinel-2, Permanent Water, and Ground Truth files
 with rio.open(s2_path) as src_s2, rio.open(per_path) as src_per, rio.open(gt_path) as src_gt:
     window_s2 = rio.windows.Window(512, 512, 512, 512)
     window_per = rio.windows.Window(512, 512, 512, 512)
@@ -414,8 +386,8 @@ with rio.open(s2_path) as src_s2, rio.open(per_path) as src_per, rio.open(gt_pat
     per = src_per.read(1, window=window_per)
     gt = src_gt.read(2, window=window_gt)
 
-# Display
-fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+# Plot the images
+fig, axs = plt.subplots(1, 3, figsize=(15, 5.5))
 axs[0].imshow(s2.transpose(1, 2, 0) / 2000)
 axs[0].set_title('Sentinel-2')
 axs[0].axis('off')
@@ -427,7 +399,7 @@ axs[2].set_title('Permanent Water')
 axs[2].axis('off')
 
 plt.tight_layout()
-plt.savefig("assets/worldfloods.png", dpi=300, bbox_inches='tight')
+plt.savefig("image.png")
 plt.show()
 
 
